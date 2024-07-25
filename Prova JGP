@@ -1,0 +1,158 @@
+### CUUR0000SA0 CPI ALL ITEMS
+### CUUR0000SA0L1E CPI ALL ITEMS LESS FOOD AND ENERGY
+### CUUR0000SETB01 CPI GASOLINE
+
+import requests
+import json
+import prettytable
+headers = {'Content-type': 'application/json'}
+data = json.dumps({"seriesid": ['CUUR0000SA0','CUUR0000SA0L1E','CUUR0000SETB01'],"startyear":"2019", "endyear":"2024"})
+p = requests.post('https://api.bls.gov/publicAPI/v1/timeseries/data/', data=data, headers=headers)
+json_data = json.loads(p.text)
+for series in json_data['Results']['series']:
+    x=prettytable.PrettyTable(["series id","year","period","value","footnotes"])
+    seriesId = series['seriesID']
+    for item in series['data']:
+        year = item['year']
+        period = item['period']
+        value = item['value']
+        footnotes=""
+        for footnote in item['footnotes']:
+            if footnote:
+                footnotes = footnotes + footnote['text'] + ','
+    
+        if 'M01' <= period <= 'M12':
+            x.add_row([seriesId,year,period,value,footnotes[0:-1]])
+    output = open(seriesId + '.txt','w')
+    output.write (x.get_string())
+    output.close()
+
+print(json_data)
+
+import pandas as pd
+import numpy as np
+
+file_path = 'CUUR0000SA0.txt'
+file_path = 'CUUR0000SA0L1E.txt'
+file_path = 'CUUR0000SETB01.txt'
+
+df = pd.read_csv(file_path, delimiter='\t', skiprows=1)
+print(df)
+
+cpis_txt = ['CUUR0000SA0', 'CUUR0000SA0L1E', 'CUUR0000SETB01']
+lista_cpis = []
+for cpi in cpis_txt:
+
+    df = pd.read_csv(f'{cpi}.txt', delimiter='\t', skiprows=1)
+
+    df.columns = df.columns.str.strip()
+    df.columns = df.columns.str.replace('[+|-]', '', regex=True)
+    df.columns = df.columns.str.replace('[|]', '', regex=True)
+
+    df = df.applymap(lambda x: x.strip() if isinstance(x, str) else x)
+    df = df.applymap(lambda x: x.replace('+', '').replace('-', '').replace('|', '').strip() if isinstance(x, str) else x)
+    
+    colunas = df.columns[0]
+    df = df[f'{colunas}'].str.split(expand=True)
+    
+    df.columns = ['series id', 'year', 'period', 'value']
+
+    df.replace('None', np.nan, inplace=True)
+    df.dropna(inplace=True)
+    df.drop(columns = ['series id'], inplace = True)
+    df.reset_index(drop=True, inplace=True)
+
+    period_to_month = {
+        'M01': 'Jan', 'M02': 'Feb', 'M03': 'Mar', 'M04': 'Apr', 'M05': 'May',
+        'M06': 'Jun', 'M07': 'Jul', 'M08': 'Aug', 'M09': 'Sep', 'M10': 'Oct',
+        'M11': 'Nov', 'M12': 'Dec'
+    }
+
+    df['month'] = df['period'].map(period_to_month)
+    df = df.drop(columns=['period'])
+    df = df[['year', 'month', 'value']]
+    df['month'] = pd.Categorical(df['month'], categories=['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'], ordered=True)
+    df = df.sort_values(by=['year', 'month'])
+    df['month'] = df['month'].astype(str)
+    df['value'] = df['value'].astype(float)
+    df['Date'] = pd.to_datetime(df['month'] + '-' + df['year'].astype(str), format='%b-%Y')
+    df = df[['Date', 'value']]
+
+    if cpi == 'CUUR0000SA0':
+        df.rename(columns = {'value': 'CPI ALL ITEMS'}, inplace = True)
+    elif cpi == 'CUUR0000SA0L1E':
+        df.rename(columns = {'value': 'CPI ALL ITEMS LESS FOOD AND ENERGY'}, inplace = True)
+    elif cpi == 'CUUR0000SETB01':
+        df.rename(columns = {'value': 'CPI GASOLINE'}, inplace = True)
+        
+    df.reset_index(drop=True, inplace = True)
+    df = df.set_index('Date')
+    df = df.pct_change()
+    print(df)
+    lista_cpis.append(df)
+
+df_cpis = pd.concat(lista_cpis, axis = 1)
+df_cpis.to_csv('CPIS.csv')
+print(df_cpis)
+
+# ### QUESTÃO 2
+import plotly.graph_objects as go
+df_food_energy = df_cpis['CPI ALL ITEMS LESS FOOD AND ENERGY']
+df_food_energy = df_food_energy.pct_change(periods=12) * 100
+print(df_food_energy)
+
+fonte = 'Avenir Next LT Pro'
+cor_fonte='#D3D3D3'
+
+layout = go.Layout(
+    paper_bgcolor = '#1C1D1D',
+    plot_bgcolor = '#1C1D1D',
+    xaxis = dict(showgrid = False, title = "Data", tickformat = '%b %Y', tickmode = 'auto', nticks = 20),
+    font = dict(color = '#FFFFFF'),
+    yaxis = dict(showgrid = False, title = 'Variação Percentual (%)', ticksuffix='%'),
+    margin = dict (l = 50, r = 50, b = 50, t = 50),
+    legend = dict (x=0.8, font_size = 22),
+    template = 'plotly_dark',
+    title = go.layout.Title(text = f'<b> Inflação Ajustada Sazonalmente - Variação Percentual Ano a Ano </b>', x = 0.5)
+)
+
+fig = go.Figure (layout = layout)
+
+fig.add_trace(
+    go.Scatter(
+    x = df_food_energy.index,
+    y = df_food_energy.values,
+    mode = 'lines+markers',
+    name = "Variação Percentual Ano a Ano",
+    marker = dict(color = 'blue'),
+    line = dict(width=1.5, color = 'blue')
+))
+
+fig.show()
+
+
+from sklearn.linear_model import LinearRegression
+import statsmodels.api as sm
+
+### QUESTÃO 3
+# TEORIA: MYSQL + AWS + E-MAIL
+
+
+### QUESTÃO 4
+X = df_cpis['CPI ALL ITEMS']
+y = df_cpis['CPI GASOLINE']
+X = sm.add_constant(X)
+model = sm.OLS(y, X).fit()
+
+
+print(model.summary())
+
+# As variáveis possuem uma correlação de 67%
+# Portanto, neste modelo simplificado a gasolina é um fator 
+# majoritariamente determinístico do CPI All Items 
+# Entretanto, não é o suficiente para poder explicar unicamente 
+# O indicador. Para realizar uma análise mais precisa, é necessário
+# Inserir mais indicadores que podem influenciar.
+# Podemos concluir que, segundo o modelo, caso o CPI Gasoline
+# sofra uma alteração, esta alteração impactará em 67% 
+# o CPI all items 
